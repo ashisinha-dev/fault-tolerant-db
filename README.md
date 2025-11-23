@@ -34,7 +34,7 @@ Your work will use exactly one (not both) of the two files in the `faulttoleranc
 
 1. [`MyDBReplicableAppGP`](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/src/server/faulttolerance/MyDBReplicableAppGP.java) if using the GigaPaxos/RSM approach.
 
-2. [`MyDBFaultTolerantServerZK`](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/src/server/faulttolerance/MyDBFaultTolerantServerZK.java) otherwise.
+2. [`MyDBFaultTolerantServerZK`](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/src/server/faulttolerance/MyDBFaultTolerantServerZK.java) otherwise (including the optional extra-credit approach).
 
 You may create as many additional code files as needed in the `faulttolerance` package to support your implementation. 
 ***
@@ -55,7 +55,7 @@ The test code (what used to be [`Grader`] for consistency-only tests) has evolve
 # Constraints #
 Your implementation must respect the following constraints, but these are not meant to be exhaustive, so if in doubt, ask.
 
-1. Pick exactly one of the three high-level options in the Goal section above; do not mix multiple options. You may however implement two entirely separate options for extra credit (see constraint #5 below).
+1. Pick exactly one of the three high-level options at a time in the Goal section above; do not mix multiple options. 
 
 2. If using the Zookeeper option, keep in mind the following (also documented at the top of [`MyDBFaultTolerantServerZK`](https://bitbucket.org/distrsys/fault-tolerant-db/src/master/src/server/faulttolerance/MyDBFaultTolerantServerZK.java)):
 	1. You can not use any other form of coordination (like the file system or a database) between servers other than through Zookeeper. 
@@ -66,9 +66,7 @@ Your implementation must respect the following constraints, but these are not me
 
 4. For all options, you can not maintain any in-memory or on-disk data structure containing more than [`MAX_LOG_SIZE (default 400)`](https://bitbucket.org/distrsys/fault-tolerant-db/src/9a12b86469508854d641de52f19170ec6db712b5/src/server/faulttolerance/MyDBFaultTolerantServerZK.java#lines-49) requests.
 
-5. You may for extra credit implement two of the three options and if you do so, one of the two options must be GigaPaxos.
-
-6. You shouldn't need any external libraries not already included, but you are welcome to check with us and use external libraries that would make your implementation less onerous whille preserving the spirit of the assignmennt.
+5. You shouldn't need any external libraries not already included, but you are welcome to check with us and use external libraries that would make your implementation less onerous whille preserving the spirit of the assignmennt.
 	
 	***
 
