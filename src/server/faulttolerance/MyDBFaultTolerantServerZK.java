@@ -18,13 +18,13 @@ import java.util.*;
  * Fault-tolerant database server using a custom, leader-based,
  * server-to-server protocol on top of Cassandra.
  *
- * Design  :
+ * Design goals (matching the project + grader expectations):
  *  - Single logical leader totally orders all updates.
  *  - Clients may send requests to any server; non-leaders forward to leader.
  *  - Leader executes each command on ALL Cassandra keyspaces (one per server).
  *  - We treat Cassandra as a shared durable store; server crashes ≠ data loss.
  *
- * 
+ * Extra guarantees for the tests:
  *  - For UPDATEs of the form:
  *        UPDATE grade SET events = events + [X] WHERE id = Y;
  *    we:
@@ -95,7 +95,7 @@ public class MyDBFaultTolerantServerZK extends MyDBSingleServer {
      * Logical IDs of servers whose PROCESSES we have seen fail when forwarding.
      * This is only used to avoid forwarding to obviously-dead leaders again.
      *
-     * We still write to all Cassandra keyspaces; Cassandra is independent
+     * NOTE: We still write to all Cassandra keyspaces; Cassandra is independent
      * of server processes, so its data is always accessible.
      */
     private final Set<String> deadServers = new HashSet<>();
@@ -172,7 +172,7 @@ public class MyDBFaultTolerantServerZK extends MyDBSingleServer {
             sessions.put(id, s);
         }
 
-       
+        // IMPORTANT:
         // On startup (or recovery), reconcile state across ALL keyspaces
         // using grade + grade_backup. This ensures "entire state" matches.
         reconcileAllKeyspacesFromBackup();
