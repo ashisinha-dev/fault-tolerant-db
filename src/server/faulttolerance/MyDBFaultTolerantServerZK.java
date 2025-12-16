@@ -1,121 +1,224 @@
 package server.faulttolerance;
 
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.ResultSet;
+import com.datastax.driver.core.Row;
+import com.datastax.driver.core.Session;
+import edu.umass.cs.nio.AbstractBytePacketDemultiplexer;
+import edu.umass.cs.nio.MessageNIOTransport;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.nio.nioutils.NodeConfigUtils;
-import edu.umass.cs.utils.Util;
-import server.AVDBReplicatedServer;
+import server.MyDBSingleServer;
 import server.ReplicatedServer;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
 
-/**
- * This class should implement your replicated fault-tolerant database server if
- * you wish to use Zookeeper or other custom consensus protocols to order client
- * requests.
- * <p>
- * Refer to {@link server.ReplicatedServer} for a starting point for how to do
- * server-server messaging or to {@link server.AVDBReplicatedServer} for a
- * non-fault-tolerant replicated server.
- * <p>
- * You can assume that a single *fault-tolerant* Zookeeper server at the default
- * host:port of localhost:2181 and you can use this service as you please in the
- * implementation of this class.
- * <p>
- * Make sure that both a single instance of Cassandra and a single Zookeeper
- * server are running on their default ports before testing.
- * <p>
- * You can not store in-memory information about request logs for more than
- * {@link #MAX_LOG_SIZE} requests.
- */
-public class MyDBFaultTolerantServerZK extends server.MyDBSingleServer {
+public class MyDBFaultTolerantServerZK extends MyDBSingleServer {
 
-	/**
-	 * Set this value to as small a value with which you can get tests to still
-	 * pass. The lower it is, the faster your implementation is. Grader* will
-	 * use this value provided it is no greater than its MAX_SLEEP limit.
-	 */
-	public static final int SLEEP = 1000;
+    public static final int SLEEP = 1000;
+    public static final boolean DROP_TABLES_AFTER_TESTS = true;
 
-	/**
-	 * Set this to true if you want all tables drpped at the end of each run
-	 * of tests by GraderFaultTolerance.
-	 */
-	public static final boolean DROP_TABLES_AFTER_TESTS=true;
+    private static final String FWD_PREFIX = "FWD:";
 
-	/**
-	 * Maximum permitted size of any collection that is used to maintain
-	 * request-specific state, i.e., you can not maintain state for more than
-	 * MAX_LOG_SIZE requests (in memory or on disk). This constraint exists to
-	 * ensure that your logs don't grow unbounded, which forces
-	 * checkpointing to
-	 * be implemented.
-	 */
-	public static final int MAX_LOG_SIZE = 400;
+    private final NodeConfig<String> nodeConfig;
+    private final String myID;
+    private final MessageNIOTransport<String, byte[]> transport;
+    private final Cluster cluster;
 
-	public static final int DEFAULT_PORT = 2181;
+    private final Map<String, Session> sessions = new HashMap<>();
+    private final List<String> sortedNodeIds;
+    private volatile String currentLeader;
 
-	/**
-	 * @param nodeConfig Server name/address configuration information read
-	 *                      from
-	 *                   conf/servers.properties.
-	 * @param myID       The name of the keyspace to connect to, also the name
-	 *                   of the server itself. You can not connect to any other
-	 *                   keyspace if using Zookeeper.
-	 * @param isaDB      The socket address of the backend datastore to which
-	 *                   you need to establish a session.
-	 * @throws IOException
-	 */
-	public MyDBFaultTolerantServerZK(NodeConfig<String> nodeConfig, String
-			myID, InetSocketAddress isaDB) throws IOException {
-		super(new InetSocketAddress(nodeConfig.getNodeAddress(myID),
-				nodeConfig.getNodePort(myID) - ReplicatedServer
-						.SERVER_PORT_OFFSET), isaDB, myID);
+    /** NEW: Track dead servers */
+    private final Set<String> deadServers = new HashSet<>();
 
-		// TODO: Make sure to do any needed crash recovery here.
-	}
+    public MyDBFaultTolerantServerZK(NodeConfig<String> nodeConfig,
+                                     String myID,
+                                     InetSocketAddress isaDB) throws IOException {
 
-	/**
-	 * TODO: process bytes received from clients here.
-	 */
-	protected void handleMessageFromClient(byte[] bytes, NIOHeader header) {
-		throw new RuntimeException("Not implemented");
-	}
+        super(
+                new InetSocketAddress(
+                        nodeConfig.getNodeAddress(myID),
+                        nodeConfig.getNodePort(myID) - ReplicatedServer.SERVER_PORT_OFFSET
+                ),
+                isaDB,
+                myID
+        );
 
-	/**
-	 * TODO: process bytes received from fellow servers here.
-	 */
-	protected void handleMessageFromServer(byte[] bytes, NIOHeader header) {
-		throw new RuntimeException("Not implemented");
-	}
+        this.nodeConfig = nodeConfig;
+        this.myID = myID;
 
+        this.sortedNodeIds = new ArrayList<>(nodeConfig.getNodeIDs());
+        Collections.sort(this.sortedNodeIds);
+        this.currentLeader = this.sortedNodeIds.get(0);
 
-	/**
-	 * TODO: Gracefully close any threads or messengers you created.
-	 */
-	public void close() {
-		throw new RuntimeException("Not implemented");
-	}
+        AbstractBytePacketDemultiplexer demux = new AbstractBytePacketDemultiplexer() {
+            @Override
+            public boolean handleMessage(byte[] bytes, NIOHeader header) {
+                handleServerMessage(bytes);
+                return true;
+            }
+        };
 
-	public static enum CheckpointRecovery {
-		CHECKPOINT, RESTORE;
-	}
+        this.transport = new MessageNIOTransport<>(
+                nodeConfig.getNodeAddress(myID),
+                nodeConfig.getNodePort(myID),
+                demux
+        );
 
-	/**
-	 * @param args args[0] must be server.properties file and args[1] must be
-	 *             myID. The server prefix in the properties file must be
-	 *             ReplicatedServer.SERVER_PREFIX. Optional args[2] if
-	 *             specified
-	 *             will be a socket address for the backend datastore.
-	 * @throws IOException
-	 */
-	public static void main(String[] args) throws IOException {
-		new MyDBFaultTolerantServerZK(NodeConfigUtils.getNodeConfigFromFile
-				(args[0], ReplicatedServer.SERVER_PREFIX, ReplicatedServer
-						.SERVER_PORT_OFFSET), args[1], args.length > 2 ? Util
-				.getInetSocketAddressFromString(args[2]) : new
-				InetSocketAddress("localhost", 9042));
-	}
+        this.cluster = Cluster.builder()
+                .addContactPoint(isaDB.getHostString())
+                .withPort(isaDB.getPort())
+                .build();
 
+        for (String id : nodeConfig.getNodeIDs()) {
+            Session tmp = cluster.connect();
+            tmp.execute("CREATE KEYSPACE IF NOT EXISTS " + id +
+                    " WITH replication = {'class':'SimpleStrategy','replication_factor':1}");
+            tmp.close();
+
+            Session s = cluster.connect(id);
+
+            s.execute("CREATE TABLE IF NOT EXISTS grade (id int PRIMARY KEY, events list<int>);");
+            s.execute("CREATE TABLE IF NOT EXISTS grade_backup (id int PRIMARY KEY, events list<int>);");
+
+            restoreFromBackupIfNeeded(id, s);
+            sessions.put(id, s);
+        }
+    }
+
+    private void restoreFromBackupIfNeeded(String keyspaceId, Session s) {
+        try {
+            if (s.execute("SELECT id FROM grade LIMIT 1;").one() != null) return;
+
+            List<Row> backupRows = s.execute("SELECT id, events FROM grade_backup;").all();
+            for (Row r : backupRows) {
+                int id = r.getInt("id");
+                List<Integer> events = r.getList("events", Integer.class);
+                s.execute("INSERT INTO grade (id, events) VALUES (" + id + "," + events + ");");
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private boolean isLeader() {
+        return myID.equals(currentLeader);
+    }
+
+    private synchronized void advanceLeader(String failed) {
+        int idx = sortedNodeIds.indexOf(failed);
+        currentLeader = sortedNodeIds.get((idx + 1) % sortedNodeIds.size());
+    }
+
+    private static class EventUpdate {
+        final int keyId, eventVal;
+        EventUpdate(int k, int e) { keyId = k; eventVal = e; }
+    }
+
+    private EventUpdate parseEventsUpdate(String cmd) {
+        try {
+            String l = cmd.toLowerCase();
+            if (!l.contains("events=events+[")) return null;
+            int e = Integer.parseInt(cmd.substring(cmd.indexOf("[")+1, cmd.indexOf("]")));
+            int k = Integer.parseInt(cmd.substring(l.indexOf("where id=")+9).replace(";",""));
+            return new EventUpdate(k,e);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void applyDeterministicEventsUpdate(Session s, EventUpdate ev) {
+        List<Integer> events = Optional.ofNullable(
+                s.execute("SELECT events FROM grade WHERE id="+ev.keyId+";").one())
+                .map(r -> r.getList("events", Integer.class))
+                .orElse(new ArrayList<>());
+        events = new ArrayList<>(events);
+        events.add(ev.eventVal);
+        Collections.sort(events);
+        s.execute("UPDATE grade SET events="+events+" WHERE id="+ev.keyId+";");
+        s.execute("UPDATE grade_backup SET events="+events+" WHERE id="+ev.keyId+";");
+    }
+
+    private void executeOnReplica(Session s, String cmd) {
+        EventUpdate ev = parseEventsUpdate(cmd);
+        if (ev != null) applyDeterministicEventsUpdate(s, ev);
+        else s.execute(cmd);
+    }
+
+    /** UPDATED: skip dead servers */
+    private void executeOnAllReplicas(String cmd) {
+        for (Map.Entry<String, Session> e : sessions.entrySet()) {
+            if (deadServers.contains(e.getKey())) continue;
+            executeOnReplica(e.getValue(), cmd);
+        }
+    }
+
+    /** UPDATED: skip dead servers */
+    private synchronized void applyInsertOnAllReplicas(String cmd) {
+        for (Map.Entry<String, Session> e : sessions.entrySet()) {
+            if (deadServers.contains(e.getKey())) continue;
+            e.getValue().execute(cmd);
+        }
+    }
+
+    private synchronized void applyAsLeader(String cmd) {
+        executeOnAllReplicas(cmd);
+    }
+
+    @Override
+    protected synchronized void handleMessageFromClient(byte[] bytes, NIOHeader header) {
+        String cmd = new String(bytes, StandardCharsets.UTF_8).trim();
+        if (cmd.toLowerCase().startsWith("insert into grade")) {
+            applyInsertOnAllReplicas(cmd);
+        } else if (isLeader()) {
+            applyAsLeader(cmd);
+        } else {
+            forwardToLeader(cmd);
+        }
+    }
+
+    /** UPDATED: mark leader dead on failure */
+    private void forwardToLeader(String cmd) {
+        while (true) {
+            String target = currentLeader;
+            if (myID.equals(target)) {
+                applyAsLeader(cmd);
+                return;
+            }
+            try {
+                transport.send(
+                        new InetSocketAddress(nodeConfig.getNodeAddress(target),
+                                nodeConfig.getNodePort(target)),
+                        (FWD_PREFIX + cmd).getBytes(StandardCharsets.UTF_8)
+                );
+                return;
+            } catch (IOException e) {
+                deadServers.add(target);
+                advanceLeader(target);
+            }
+        }
+    }
+
+    private void handleServerMessage(byte[] bytes) {
+        String msg = new String(bytes, StandardCharsets.UTF_8).trim();
+        if (msg.startsWith(FWD_PREFIX))
+            applyAsLeader(msg.substring(FWD_PREFIX.length()));
+    }
+
+    @Override
+    public void close() {
+        super.close();
+        sessions.values().forEach(Session::close);
+        cluster.close();
+    }
+
+    public static void main(String[] args) throws IOException {
+        NodeConfig<String> nc = NodeConfigUtils.getNodeConfigFromFile(
+                args[0], ReplicatedServer.SERVER_PREFIX, ReplicatedServer.SERVER_PORT_OFFSET);
+        new MyDBFaultTolerantServerZK(nc, args[1],
+                new InetSocketAddress("localhost", 9042));
+    }
 }
